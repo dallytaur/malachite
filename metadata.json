@@ -1,0 +1,6 @@
+{
+  "name": "MinimaBrowser",
+  "description": "A sleek, minimalist boilerplate browser with custom bottom navigation and no browser UI, featuring customizable quick-dial buttons.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
