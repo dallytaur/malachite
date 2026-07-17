@@ -24,11 +24,16 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -70,6 +75,132 @@ data class Bookmark(
   val url: String
 )
 
+// Core data structures for tracking and managing user affinity & snooze preferences per domain
+data class DomainObject(
+  val url: String,
+  val affinityScore: Float = 1.0f,
+  val snoozeTimestamp: Long? = null, // Milliseconds since epoch, null if not snoozed
+  val lastUpdated: Long = System.currentTimeMillis(),
+  val pages: List<PageObject> = emptyList()
+)
+
+data class PageObject(
+  val name: String,
+  val path: String,
+  val affinityScore: Float = 1.0f,
+  val snoozeTimestamp: Long? = null, // Milliseconds since epoch, null if not snoozed
+  val lastUpdated: Long = System.currentTimeMillis()
+)
+
+// Retroactive Decay Mechanism
+fun decayScore(score: Float, lastUpdated: Long, currentTime: Long): Pair<Float, Long> {
+  val hoursPassed = ((currentTime - lastUpdated) / (1000L * 60 * 60)).toInt()
+  if (hoursPassed <= 0) return Pair(score, lastUpdated)
+  val decayAmount = hoursPassed * 0.01f
+  val newScore = if (score > 1.0f) {
+    maxOf(1.0f, score - decayAmount)
+  } else if (score < 1.0f) {
+    minOf(1.0f, score + decayAmount)
+  } else {
+    1.0f
+  }
+  return Pair(newScore, currentTime)
+}
+
+// Weighted Random Selection Algorithm
+fun selectNextPage(
+  domains: List<DomainObject>,
+  currentTime: Long
+): Triple<DomainObject, PageObject, List<DomainObject>>? {
+  val updatedDomains = domains.map { domain ->
+    // Query domains where snooze is null or expired
+    val isSnoozed = domain.snoozeTimestamp != null && domain.snoozeTimestamp > currentTime
+    if (isSnoozed) return@map domain
+    
+    // Decay domain
+    val (newDomainScore, newDomainLastUpdated) = decayScore(domain.affinityScore, domain.lastUpdated, currentTime)
+    
+    // Decay pages
+    val updatedPages = domain.pages.map { page ->
+      val isPageSnoozed = page.snoozeTimestamp != null && page.snoozeTimestamp > currentTime
+      if (isPageSnoozed) return@map page
+      
+      val (newPageScore, newPageLastUpdated) = decayScore(page.affinityScore, page.lastUpdated, currentTime)
+      page.copy(affinityScore = newPageScore, lastUpdated = newPageLastUpdated)
+    }
+    
+    domain.copy(
+      affinityScore = newDomainScore,
+      lastUpdated = newDomainLastUpdated,
+      pages = updatedPages
+    )
+  }
+
+  // Filter valid unsnoozed domains
+  var remainingDomains = updatedDomains.filter { domain ->
+    domain.snoozeTimestamp == null || domain.snoozeTimestamp <= currentTime
+  }
+
+  while (remainingDomains.isNotEmpty()) {
+    // Perform weighted random selection of Domain
+    val totalDomainWeight = remainingDomains.sumOf { it.affinityScore.toDouble() }
+    if (totalDomainWeight <= 0.0) {
+      val selectedDomain = remainingDomains.randomOrNull() ?: break
+      val page = pickWeightedPageForDomain(selectedDomain, currentTime)
+      if (page != null) {
+        return Triple(selectedDomain, page, updatedDomains)
+      } else {
+        remainingDomains = remainingDomains - selectedDomain
+        continue
+      }
+    }
+    
+    val randomValue = kotlin.random.Random.nextDouble() * totalDomainWeight
+    var accumulatedWeight = 0.0
+    var selectedDomain: DomainObject? = null
+    for (domain in remainingDomains) {
+      accumulatedWeight += domain.affinityScore
+      if (randomValue <= accumulatedWeight) {
+        selectedDomain = domain
+        break
+      }
+    }
+    if (selectedDomain == null) selectedDomain = remainingDomains.last()
+
+    // Query valid child pages for the selected domain
+    val page = pickWeightedPageForDomain(selectedDomain, currentTime)
+    if (page != null) {
+      return Triple(selectedDomain, page, updatedDomains)
+    } else {
+      // Fallback: loop back and pick a new Domain
+      remainingDomains = remainingDomains - selectedDomain
+    }
+  }
+  return null
+}
+
+fun pickWeightedPageForDomain(domain: DomainObject, currentTime: Long): PageObject? {
+  val validPages = domain.pages.filter { page ->
+    page.snoozeTimestamp == null || page.snoozeTimestamp <= currentTime
+  }
+  if (validPages.isEmpty()) return null
+  
+  val totalPageWeight = validPages.sumOf { page -> page.affinityScore.toDouble() }
+  if (totalPageWeight <= 0.0) {
+    return validPages.randomOrNull()
+  }
+  
+  val randomValue = kotlin.random.Random.nextDouble() * totalPageWeight
+  var accumulatedWeight = 0.0
+  for (page in validPages) {
+    accumulatedWeight += page.affinityScore
+    if (randomValue <= accumulatedWeight) {
+      return page
+    }
+  }
+  return validPages.last()
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun BrowserApp() {
@@ -84,7 +215,7 @@ fun BrowserApp() {
         loadBookmark(sharedPrefs, 2, "EXPLORE", "https://en.m.wikipedia.org"),
         loadBookmark(sharedPrefs, 3, "SAVED", "https://news.google.com"),
         loadBookmark(sharedPrefs, 4, "FILES", "https://github.com"),
-        loadBookmark(sharedPrefs, 5, "PROFILE", "https://dev.to")
+        loadBookmark(sharedPrefs, 5, "FEED", "https://old.reddit.com/r/android")
       )
     )
   }
@@ -94,6 +225,158 @@ fun BrowserApp() {
   var progress by remember { mutableStateOf(0) }
   var isPageLoading by remember { mutableStateOf(false) }
   var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+
+  // Core domain-page databases state
+  var domainsList by remember {
+    mutableStateOf(
+      listOf(
+        DomainObject(
+          url = "https://old.reddit.com",
+          affinityScore = 1.0f,
+          lastUpdated = System.currentTimeMillis(),
+          pages = listOf(
+            PageObject("Reddit Android", "/r/android", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Reddit Kotlin", "/r/kotlin", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Reddit Science", "/r/science", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Reddit Today I Learned", "/r/todayilearned", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Reddit Programming", "/r/programming", 1.0f, lastUpdated = System.currentTimeMillis())
+          )
+        ),
+        DomainObject(
+          url = "https://en.m.wikipedia.org",
+          affinityScore = 1.0f,
+          lastUpdated = System.currentTimeMillis(),
+          pages = listOf(
+            PageObject("Wikipedia Malachite", "/wiki/Malachite", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Wikipedia Kotlin", "/wiki/Kotlin_(programming_language)", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Wikipedia Jetpack Compose", "/wiki/Jetpack_Compose", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Wikipedia Material Design", "/wiki/Material_Design", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Wikipedia Android Dev", "/wiki/Android_software_development", 1.0f, lastUpdated = System.currentTimeMillis())
+          )
+        ),
+        DomainObject(
+          url = "https://news.google.com",
+          affinityScore = 1.0f,
+          lastUpdated = System.currentTimeMillis(),
+          pages = listOf(
+            PageObject("Google News Tech", "/news/rss/headlines/section/topic/TECHNOLOGY", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Google News Science", "/news/rss/headlines/section/topic/SCIENCE", 1.0f, lastUpdated = System.currentTimeMillis()),
+            PageObject("Google News Business", "/news/rss/headlines/section/topic/BUSINESS", 1.0f, lastUpdated = System.currentTimeMillis())
+          )
+        )
+      )
+    )
+  }
+
+  var activeDomainObject by remember { mutableStateOf<DomainObject?>(null) }
+  var activePageObject by remember { mutableStateOf<PageObject?>(null) }
+
+  // Update lambdas for gesture touch loop
+  val updateUpvote = {
+    val now = System.currentTimeMillis()
+    activePageObject?.let { activePage ->
+      activeDomainObject?.let { activeDomain ->
+        domainsList = domainsList.map { domain ->
+          if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
+            val updatedPages = domain.pages.map { page ->
+              if (page.path.equals(activePage.path, ignoreCase = true)) {
+                page.copy(affinityScore = minOf(2.0f, page.affinityScore + 0.02f), lastUpdated = now)
+              } else page
+            }
+            val newDomainScore = minOf(2.0f, domain.affinityScore + 0.02f)
+            val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
+            
+            activeDomainObject = updatedDomain
+            activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+            
+            android.widget.Toast.makeText(context, "Upvoted! Page affinity: %.2f (Domain: %.2f)".format(activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+            updatedDomain
+          } else domain
+        }
+      }
+    } ?: run {
+      android.widget.Toast.makeText(context, "Upvoted! (Load Feed / Button 5 to change specific page affinities)", android.widget.Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  val updateDownvote = {
+    val now = System.currentTimeMillis()
+    activePageObject?.let { activePage ->
+      activeDomainObject?.let { activeDomain ->
+        domainsList = domainsList.map { domain ->
+          if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
+            val updatedPages = domain.pages.map { page ->
+              if (page.path.equals(activePage.path, ignoreCase = true)) {
+                page.copy(affinityScore = maxOf(0.0f, page.affinityScore - 0.02f), lastUpdated = now)
+              } else page
+            }
+            val newDomainScore = maxOf(0.0f, domain.affinityScore - 0.02f)
+            val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
+            
+            activeDomainObject = updatedDomain
+            activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+            
+            android.widget.Toast.makeText(context, "Downvoted! Page affinity: %.2f (Domain: %.2f)".format(activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+            updatedDomain
+          } else domain
+        }
+      }
+    } ?: run {
+      android.widget.Toast.makeText(context, "Downvoted! (Load Feed / Button 5 to change specific page affinities)", android.widget.Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  val updateSnooze = {
+    val now = System.currentTimeMillis()
+    val snoozeDuration = 1000L * 60 * 60 // 1 hour
+    activePageObject?.let { activePage ->
+      activeDomainObject?.let { activeDomain ->
+        domainsList = domainsList.map { domain ->
+          if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
+            val updatedPages = domain.pages.map { page ->
+              if (page.path.equals(activePage.path, ignoreCase = true)) {
+                page.copy(snoozeTimestamp = now + snoozeDuration)
+              } else page
+            }
+            val updatedDomain = domain.copy(pages = updatedPages)
+            
+            activeDomainObject = updatedDomain
+            activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+            
+            android.widget.Toast.makeText(context, "Snoozed ${activePage.name} for 1 Hour!", android.widget.Toast.LENGTH_SHORT).show()
+            updatedDomain
+          } else domain
+        }
+      }
+    } ?: run {
+      android.widget.Toast.makeText(context, "Snoozed current page for 1 hour!", android.widget.Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  // Auto-detect and bind current url to matching domain/page in state
+  LaunchedEffect(currentUrl) {
+    var foundMatch = false
+    for (domain in domainsList) {
+      if (currentUrl.startsWith(domain.url, ignoreCase = true)) {
+        val path = currentUrl.substring(domain.url.length)
+        val matchedPage = domain.pages.find { page -> 
+          path.trimEnd('/').equals(page.path.trimEnd('/'), ignoreCase = true) || 
+          page.path.trimEnd('/').equals(path.trimEnd('/'), ignoreCase = true) ||
+          currentUrl.endsWith(page.path, ignoreCase = true)
+        }
+        if (matchedPage != null) {
+          activeDomainObject = domain
+          activePageObject = matchedPage
+          foundMatch = true
+          break
+        }
+      }
+    }
+    if (!foundMatch) {
+      activeDomainObject = null
+      activePageObject = null
+    }
+  }
 
   // Selected bookmark index (1-based), if active
   var activeBookmarkId by remember { mutableStateOf(1) }
@@ -106,6 +389,9 @@ fun BrowserApp() {
 
   // Settings window visibility state
   var showSettingsWindow by remember { mutableStateOf(false) }
+
+  // Checkbox state in the settings dialog
+  var backgroundSyncEnabled by remember { mutableStateOf(false) }
 
   // Gesture mode visibility/active override state over the WebView
   var isGestureActive by remember { mutableStateOf(true) }
@@ -286,8 +572,32 @@ fun BrowserApp() {
                     .combinedClickable(
                       onClick = {
                         activeBookmarkId = bookmark.id
-                        currentUrl = bookmark.url
-                        webViewInstance?.loadUrl(bookmark.url)
+                        if (bookmark.id == 5) {
+                          val now = System.currentTimeMillis()
+                          val result = selectNextPage(domainsList, now)
+                          if (result != null) {
+                            val (selDomain, selPage, updatedDomains) = result
+                            domainsList = updatedDomains
+                            activeDomainObject = selDomain
+                            activePageObject = selPage
+                            val fullUrl = selDomain.url + selPage.path
+                            currentUrl = fullUrl
+                            webViewInstance?.loadUrl(fullUrl)
+                            android.widget.Toast.makeText(
+                              context,
+                              "Feed Selected: ${selPage.name} (Domain: %.2f, Page: %.2f)".format(selDomain.affinityScore, selPage.affinityScore),
+                              android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                          } else {
+                            domainsList = domainsList.map { d ->
+                              d.copy(snoozeTimestamp = null, pages = d.pages.map { p -> p.copy(snoozeTimestamp = null) })
+                            }
+                            android.widget.Toast.makeText(context, "All feeds are snoozed! Cleared all snoozes. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                          }
+                        } else {
+                          currentUrl = bookmark.url
+                          webViewInstance?.loadUrl(bookmark.url)
+                        }
                       },
                       onLongClick = {
                         editingBookmark = bookmark
@@ -357,13 +667,17 @@ fun BrowserApp() {
           factory = { context ->
             object : WebView(context) {
               private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean {
+                  return true
+                }
+
                 override fun onDoubleTap(e: MotionEvent): Boolean {
                   android.widget.Toast.makeText(context, "You did Double Tap!", android.widget.Toast.LENGTH_SHORT).show()
                   return true
                 }
 
                 override fun onLongPress(e: MotionEvent) {
-                  android.widget.Toast.makeText(context, "You did Hold!", android.widget.Toast.LENGTH_SHORT).show()
+                  updateSnooze()
                 }
 
                 override fun onFling(
@@ -378,9 +692,9 @@ fun BrowserApp() {
                     if (Math.abs(diffX) > Math.abs(diffY)) {
                       if (Math.abs(diffX) > 120 && Math.abs(velocityX) > 150) {
                         if (diffX > 0) {
-                          android.widget.Toast.makeText(context, "You did Swipe Right!", android.widget.Toast.LENGTH_SHORT).show()
+                          updateUpvote()
                         } else {
-                          android.widget.Toast.makeText(context, "You did Swipe Left!", android.widget.Toast.LENGTH_SHORT).show()
+                          updateDownvote()
                         }
                         return true
                       }
@@ -392,10 +706,7 @@ fun BrowserApp() {
 
               override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 if (isGestureActive) {
-                  val gestureHandled = gestureDetector.onTouchEvent(event)
-                  if (gestureHandled) {
-                    return true
-                  }
+                  gestureDetector.onTouchEvent(event)
                 }
                 return super.dispatchTouchEvent(event)
               }
@@ -553,38 +864,342 @@ fun BrowserApp() {
         Column(
           modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(vertical = 16.dp),
-          verticalArrangement = Arrangement.spacedBy(16.dp)
+          verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(220.dp)
-              .clip(RoundedCornerShape(16.dp))
-              .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-            contentAlignment = Alignment.Center
+          Text(
+            text = "Configure guest overrides and trigger test actions on this device.",
+            style = MaterialTheme.typography.bodyMedium.copy(
+              color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+          )
+
+          Spacer(modifier = Modifier.height(4.dp))
+
+          // Live Engine Database Dashboard
+          Text(
+            text = "Live Affinity Engine Database",
+            style = MaterialTheme.typography.titleMedium.copy(
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.primary
+            )
+          )
+          
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+              1.dp,
+              MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+            )
           ) {
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.Center,
-              modifier = Modifier.padding(16.dp)
+            Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Text(
+                  text = "Engine States",
+                  style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  TextButton(
+                    onClick = {
+                      val simulatedTime = System.currentTimeMillis() + 36000000L
+                      domainsList = domainsList.map { d ->
+                        val (newScore, newLastUpdated) = decayScore(d.affinityScore, d.lastUpdated, simulatedTime)
+                        val updatedPages = d.pages.map { p ->
+                          val (newPageScore, newPageLastUpdated) = decayScore(p.affinityScore, p.lastUpdated, simulatedTime)
+                          p.copy(affinityScore = newPageScore, lastUpdated = newPageLastUpdated)
+                        }
+                        d.copy(affinityScore = newScore, lastUpdated = newLastUpdated, pages = updatedPages)
+                      }
+                      android.widget.Toast.makeText(context, "Simulated 10 hours of retroactive score decay!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                  ) {
+                    Text("Decay (10h)", style = MaterialTheme.typography.labelSmall)
+                  }
+                  TextButton(
+                    onClick = {
+                      domainsList = domainsList.map { d ->
+                        d.copy(
+                          affinityScore = 1.0f,
+                          snoozeTimestamp = null,
+                          lastUpdated = System.currentTimeMillis(),
+                          pages = d.pages.map { p ->
+                            p.copy(affinityScore = 1.0f, snoozeTimestamp = null, lastUpdated = System.currentTimeMillis())
+                          }
+                        )
+                      }
+                      android.widget.Toast.makeText(context, "Affinities and snoozes reset!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                  ) {
+                    Text("Reset", style = MaterialTheme.typography.labelSmall)
+                  }
+                }
+              }
+              
+              Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)))
+              Spacer(modifier = Modifier.height(6.dp))
+              
+              domainsList.forEach { domain ->
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = domain.url.replace("https://", ""),
+                      style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary),
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f)
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Text(
+                        text = "Score: %.2f".format(domain.affinityScore),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                      )
+                      if (domain.snoozeTimestamp != null && domain.snoozeTimestamp > System.currentTimeMillis()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                          imageVector = Icons.Default.Snooze,
+                          contentDescription = "Snoozed",
+                          tint = Color(0xFFFF9800),
+                          modifier = Modifier.size(12.dp)
+                        )
+                      }
+                    }
+                  }
+                  
+                  domain.pages.forEach { page ->
+                    Row(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
+                    ) {
+                      Text(
+                        text = page.name,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                      )
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                          text = "%.2f".format(page.affinityScore),
+                          style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
+                        )
+                        if (page.snoozeTimestamp != null && page.snoozeTimestamp > System.currentTimeMillis()) {
+                          Spacer(modifier = Modifier.width(4.dp))
+                          Icon(
+                            imageVector = Icons.Default.Snooze,
+                            contentDescription = "Snoozed",
+                            tint = Color(0xFFFF9800),
+                            modifier = Modifier.size(10.dp)
+                          )
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          Spacer(modifier = Modifier.height(4.dp))
+
+          // 1. Favorites (heart) action stub
+          Card(
+            onClick = {
+              android.widget.Toast.makeText(context, "You did Favorite!", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              Text(
-                text = "Empty Configurations",
-                style = MaterialTheme.typography.titleMedium.copy(
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.primary
-                ),
-                textAlign = TextAlign.Center
+              Icon(
+                imageVector = Icons.Default.Favorite,
+                contentDescription = "Favorite",
+                tint = Color(0xFFE91E63),
+                modifier = Modifier.size(24.dp)
               )
-              Spacer(modifier = Modifier.height(8.dp))
-              Text(
-                text = "This space is currently left blank. Custom settings parameters will appear here in future updates.",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                  color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                ),
-                textAlign = TextAlign.Center
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text(
+                  text = "Favorite Page",
+                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                  text = "Bookmark the current URL as a favorite",
+                  style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                )
+              }
+            }
+          }
+
+          // 2. Add (+) action stub
+          Card(
+            onClick = {
+              android.widget.Toast.makeText(context, "You did Add Quick Dial!", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add Dial",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
               )
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text(
+                  text = "Add Custom Dial",
+                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                  text = "Insert a new quick access bookmark link",
+                  style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                )
+              }
+            }
+          }
+
+          // 3. Snooze (zzz) action stub
+          Card(
+            onClick = {
+              android.widget.Toast.makeText(context, "You did Snooze!", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.Snooze,
+                contentDescription = "Snooze Alerts",
+                tint = Color(0xFFFF9800),
+                modifier = Modifier.size(24.dp)
+              )
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text(
+                  text = "Snooze Domain Alerts",
+                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                  text = "Mute notifications and tracking for 1 hour",
+                  style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                )
+              }
+            }
+          }
+
+          // 4. Settings (cog) action stub
+          Card(
+            onClick = {
+              android.widget.Toast.makeText(context, "You did Settings!", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(24.dp)
+              )
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text(
+                  text = "Advanced Configurations",
+                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                  text = "Open engine parameter files and customize flags",
+                  style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                )
+              }
+            }
+          }
+
+          // 5. Stateful Checkbox
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Checkbox(
+                checked = backgroundSyncEnabled,
+                onCheckedChange = { checked ->
+                  backgroundSyncEnabled = checked
+                  val text = if (checked) "Enabled" else "Disabled"
+                  android.widget.Toast.makeText(context, "You did Toggle Checkbox: backgroundSyncEnabled is now $text", android.widget.Toast.LENGTH_SHORT).show()
+                }
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Column {
+                Text(
+                  text = "Background Sync",
+                  style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                  text = "Sync user affinities in background task manager",
+                  style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                )
+              }
             }
           }
         }
