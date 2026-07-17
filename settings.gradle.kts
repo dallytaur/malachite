@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "MinimaBrowser"
+rootProject.name = "malachite"
 
 include(":app")

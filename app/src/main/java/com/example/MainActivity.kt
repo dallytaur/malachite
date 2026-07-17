@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -19,13 +21,17 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowForward
@@ -98,6 +104,12 @@ fun BrowserApp() {
   // Custom URL sheet state
   var showGoToUrlDialog by remember { mutableStateOf(false) }
 
+  // Settings window visibility state
+  var showSettingsWindow by remember { mutableStateOf(false) }
+
+  // Gesture mode visibility/active override state over the WebView
+  var isGestureActive by remember { mutableStateOf(true) }
+
   // Handle system back navigation inside the WebView
   BackHandler(enabled = webViewInstance?.canGoBack() == true) {
     webViewInstance?.goBack()
@@ -156,52 +168,50 @@ fun BrowserApp() {
               }
             }
 
-            // Minimalist URL/Domain badge
-            Card(
-              onClick = { showGoToUrlDialog = true },
-              modifier = Modifier
-                .weight(1f)
-                .height(36.dp)
-                .padding(horizontal = 8.dp),
-              shape = RoundedCornerShape(18.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-              )
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxSize()
-                  .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-              ) {
+            Text(
+              text = "malachite",
+              style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp,
+                fontFamily = FontFamily.SansSerif
+              ),
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.weight(1f),
+              textAlign = TextAlign.Center
+            )
+
+            // Right actions row: Gesture toggle, Refresh, Settings
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              // Gesture mode toggle button
+              IconButton(onClick = { 
+                isGestureActive = !isGestureActive 
+                val status = if (isGestureActive) "Active" else "Bypassed (Browser Interaction On)"
+                android.widget.Toast.makeText(context, "Gesture Overrides: $status", android.widget.Toast.LENGTH_SHORT).show()
+              }) {
                 Icon(
-                  imageVector = if (currentUrl.startsWith("https")) Icons.Default.Lock else Icons.Default.Warning,
-                  contentDescription = "Connection Status",
-                  modifier = Modifier.size(14.dp),
-                  tint = if (currentUrl.startsWith("https")) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = domainDisplay,
-                  style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium
-                  ),
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                  imageVector = if (isGestureActive) Icons.Default.Lock else Icons.Outlined.Language,
+                  contentDescription = "Toggle Gesture Override Mode",
+                  tint = if (isGestureActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
               }
-            }
 
-            // Refresh / Reload Button
-            IconButton(onClick = { webViewInstance?.reload() }) {
-              Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = "Refresh Page",
-                tint = MaterialTheme.colorScheme.primary
-              )
+              // Refresh / Reload Button
+              IconButton(onClick = { webViewInstance?.reload() }) {
+                Icon(
+                  imageVector = Icons.Default.Refresh,
+                  contentDescription = "Refresh Page",
+                  tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                )
+              }
+
+              // Settings button
+              IconButton(onClick = { showSettingsWindow = true }) {
+                Icon(
+                  imageVector = Icons.Default.Settings,
+                  contentDescription = "Settings",
+                  tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                )
+              }
             }
           }
 
@@ -332,81 +342,254 @@ fun BrowserApp() {
       }
     }
   ) { innerPadding ->
-    Box(
+    Column(
       modifier = Modifier
         .fillMaxSize()
         .padding(innerPadding)
     ) {
-      // Embedded WebView component
-      AndroidView(
-        factory = { context ->
-          WebView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-              ViewGroup.LayoutParams.MATCH_PARENT,
-              ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            settings.apply {
-              javaScriptEnabled = true
-              domStorageEnabled = true
-              useWideViewPort = true
-              loadWithOverviewMode = true
-              setSupportZoom(true)
-              builtInZoomControls = true
-              displayZoomControls = false
+      // Embedded WebView component occupying the top weighted space
+      Box(
+        modifier = Modifier
+          .weight(1f)
+          .fillMaxWidth()
+      ) {
+        AndroidView(
+          factory = { context ->
+            object : WebView(context) {
+              private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                  android.widget.Toast.makeText(context, "You did Double Tap!", android.widget.Toast.LENGTH_SHORT).show()
+                  return true
+                }
 
-              // User agent optimization
-              userAgentString = userAgentString.replace("wv", "")
-            }
-            webViewClient = object : WebViewClient() {
-              override fun shouldOverrideUrlLoading(
-                view: WebView?,
-                request: WebResourceRequest?
-              ): Boolean {
-                // Keep all navigations inside our browser viewport
-                return false
+                override fun onLongPress(e: MotionEvent) {
+                  android.widget.Toast.makeText(context, "You did Hold!", android.widget.Toast.LENGTH_SHORT).show()
+                }
+
+                override fun onFling(
+                  e1: MotionEvent?,
+                  e2: MotionEvent,
+                  velocityX: Float,
+                  velocityY: Float
+                ): Boolean {
+                  if (e1 != null) {
+                    val diffX = e2.x - e1.x
+                    val diffY = e2.y - e1.y
+                    if (Math.abs(diffX) > Math.abs(diffY)) {
+                      if (Math.abs(diffX) > 120 && Math.abs(velocityX) > 150) {
+                        if (diffX > 0) {
+                          android.widget.Toast.makeText(context, "You did Swipe Right!", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                          android.widget.Toast.makeText(context, "You did Swipe Left!", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        return true
+                      }
+                    }
+                  }
+                  return false
+                }
+              })
+
+              override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                if (isGestureActive) {
+                  val gestureHandled = gestureDetector.onTouchEvent(event)
+                  if (gestureHandled) {
+                    return true
+                  }
+                }
+                return super.dispatchTouchEvent(event)
               }
+            }.apply {
+              layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+              )
+              settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                useWideViewPort = true
+                loadWithOverviewMode = true
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
 
-              override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                super.onPageStarted(view, url, favicon)
-                isPageLoading = true
-                url?.let {
-                  currentUrl = it
-                  // Check if the navigated URL matches one of our dials
-                  bookmarks.find { b -> it.trimEnd('/').equals(b.url.trimEnd('/'), ignoreCase = true) }?.let { b ->
-                    activeBookmarkId = b.id
+                // User agent optimization
+                userAgentString = userAgentString.replace("wv", "")
+              }
+              webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                  view: WebView?,
+                  request: WebResourceRequest?
+                ): Boolean {
+                  // Keep all navigations inside our browser viewport
+                  return false
+                }
+
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                  super.onPageStarted(view, url, favicon)
+                  isPageLoading = true
+                  url?.let {
+                    currentUrl = it
+                    // Check if the navigated URL matches one of our dials
+                    bookmarks.find { b -> it.trimEnd('/').equals(b.url.trimEnd('/'), ignoreCase = true) }?.let { b ->
+                      activeBookmarkId = b.id
+                    }
+                  }
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                  super.onPageFinished(view, url)
+                  isPageLoading = false
+                  url?.let {
+                    currentUrl = it
                   }
                 }
               }
+              webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                  super.onProgressChanged(view, newProgress)
+                  progress = newProgress
+                }
 
-              override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                isPageLoading = false
-                url?.let {
-                  currentUrl = it
+                override fun onReceivedTitle(view: WebView?, title: String?) {
+                  super.onReceivedTitle(view, title)
+                  title?.let { pageTitle = it }
                 }
               }
+              loadUrl(currentUrl)
+              webViewInstance = this
             }
-            webChromeClient = object : WebChromeClient() {
-              override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                super.onProgressChanged(view, newProgress)
-                progress = newProgress
-              }
+          },
+          update = { webView ->
+            // Make sure WebView updates correctly if loaded URL is dynamically driven
+          },
+          modifier = Modifier.fillMaxSize()
+        )
 
-              override fun onReceivedTitle(view: WebView?, title: String?) {
-                super.onReceivedTitle(view, title)
-                title?.let { pageTitle = it }
+        // Overlay discreet gesture active label (without intercepting touches itself)
+        if (isGestureActive) {
+          Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+          ) {
+            // Elegant badge indicating touch override is active
+            Card(
+              modifier = Modifier.padding(12.dp),
+              shape = RoundedCornerShape(16.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+              ),
+              border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+              )
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Lock,
+                  contentDescription = "Gestures Active",
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(12.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = "Gesture Overlay Active (Double Tap, Hold, Swipe L/R)",
+                  style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                  ),
+                  color = MaterialTheme.colorScheme.onSurface
+                )
               }
             }
-            loadUrl(currentUrl)
-            webViewInstance = this
           }
-        },
-        update = { webView ->
-          // Make sure WebView updates correctly if loaded URL is dynamically driven
-        },
-        modifier = Modifier.fillMaxSize()
-      )
+        }
+      }
     }
+  }
+
+  // Modern Dark Settings Dialog (Blank for now, styled with malachite theme)
+  if (showSettingsWindow) {
+    AlertDialog(
+      onDismissRequest = { showSettingsWindow = false },
+      properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp),
+      confirmButton = {
+        Button(
+          onClick = { showSettingsWindow = false },
+          colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+          )
+        ) {
+          Text("Close")
+        }
+      },
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Icon(
+            imageVector = Icons.Default.Settings,
+            contentDescription = "Settings",
+            tint = MaterialTheme.colorScheme.primary
+          )
+          Text(
+            text = "malachite settings",
+            style = MaterialTheme.typography.titleLarge.copy(
+              fontWeight = FontWeight.Bold,
+              letterSpacing = 1.sp
+            )
+          )
+        }
+      },
+      text = {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+          verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(220.dp)
+              .clip(RoundedCornerShape(16.dp))
+              .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            contentAlignment = Alignment.Center
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+              modifier = Modifier.padding(16.dp)
+            ) {
+              Text(
+                text = "Empty Configurations",
+                style = MaterialTheme.typography.titleMedium.copy(
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.primary
+                ),
+                textAlign = TextAlign.Center
+              )
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text = "This space is currently left blank. Custom settings parameters will appear here in future updates.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                  color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                ),
+                textAlign = TextAlign.Center
+              )
+            }
+          }
+        }
+      }
+    )
   }
 
   // Modal Dialog to edit quick dials

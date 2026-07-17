@@ -1,6 +1,6 @@
 {
-  "name": "MinimaBrowser",
-  "description": "A sleek, minimalist boilerplate browser with custom bottom navigation and no browser UI, featuring customizable quick-dial buttons.",
+  "name": "malachite",
+  "description": "A sleek, minimalist boilerplate browser named malachite, featuring custom bottom navigation, zero-UI browser design, integrated swipe and tap gesture overrides, and elegant dark aesthetics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
