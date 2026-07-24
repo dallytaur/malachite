@@ -129,6 +129,9 @@ fun AddPanelScreen(onBack: () -> Unit) {
           }
 
           // 3. Snooze (zzz) action stub
+          val activePage = BrowserState.activePageObject
+          val snoozeCount = activePage?.snoozeCount ?: 0
+          
           Card(
             onClick = { /* Implementation would go here */ },
             modifier = Modifier.fillMaxWidth(),
@@ -143,12 +146,20 @@ fun AddPanelScreen(onBack: () -> Unit) {
                 .padding(16.dp),
               verticalAlignment = Alignment.CenterVertically
             ) {
-              Icon(
-                imageVector = Icons.Default.Snooze,
-                contentDescription = "Snooze Alerts",
-                tint = Color(0xFFFF9800),
-                modifier = Modifier.size(32.dp)
-              )
+              BadgedBox(
+                badge = {
+                  if (snoozeCount > 0) {
+                    Badge { Text(snoozeCount.toString()) }
+                  }
+                }
+              ) {
+                Icon(
+                    imageVector = Icons.Default.Snooze,
+                    contentDescription = "Snooze Alerts",
+                    tint = Color(0xFFFF9800),
+                    modifier = Modifier.size(32.dp)
+                )
+              }
               Spacer(modifier = Modifier.width(16.dp))
               Column {
                 Text(

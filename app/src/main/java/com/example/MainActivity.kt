@@ -206,6 +206,7 @@ fun BrowserApp() {
   var isPageLoading by remember { mutableStateOf(false) }
   var webViewInstance by remember { mutableStateOf<WebView?>(null) }
   var cloudValue by remember { mutableIntStateOf(42) }
+  var ignoreReadTrackingForPage by remember { mutableStateOf<String?>(null) }
 
   // Observe navigation requests from other activities
   LaunchedEffect(BrowserState.currentUrlToLoad) {
@@ -228,8 +229,8 @@ fun BrowserApp() {
     )
   }
 
-  var activeDomainObject by remember { mutableStateOf<DomainObject?>(null) }
-  var activePageObject by remember { mutableStateOf<PageObject?>(null) }
+  var activeBookmarkId by remember { mutableIntStateOf(1) }
+  var editingBookmark by remember { mutableStateOf<Bookmark?>(null) }
 
   // --- Universal Dispatcher ---
   val dispatchAction = { action: BrowserAction, contextStr: String ->
@@ -237,8 +238,8 @@ fun BrowserApp() {
     when (action) {
       BrowserAction.UPVOTE -> {
         val now = System.currentTimeMillis()
-        activePageObject?.let { activePage ->
-          activeDomainObject?.let { activeDomain ->
+        BrowserState.activePageObject?.let { activePage ->
+          BrowserState.activeDomainObject?.let { activeDomain ->
             BrowserState.domainsList = BrowserState.domainsList.map { domain ->
               if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
                 val updatedPages = domain.pages.map { page ->
@@ -248,9 +249,9 @@ fun BrowserApp() {
                 }
                 val newDomainScore = minOf(2.0f, domain.affinityScore + 0.02f)
                 val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
-                activeDomainObject = updatedDomain
-                activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Upvoted! Page affinity: %.2f (Domain: %.2f)".format(activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+                BrowserState.activeDomainObject = updatedDomain
+                BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+                android.widget.Toast.makeText(context, "Upvoted! Page affinity: %.2f (Domain: %.2f)".format(BrowserState.activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
                 updatedDomain
               } else domain
             }
@@ -261,8 +262,8 @@ fun BrowserApp() {
       }
       BrowserAction.DOWNVOTE -> {
         val now = System.currentTimeMillis()
-        activePageObject?.let { activePage ->
-          activeDomainObject?.let { activeDomain ->
+        BrowserState.activePageObject?.let { activePage ->
+          BrowserState.activeDomainObject?.let { activeDomain ->
             BrowserState.domainsList = BrowserState.domainsList.map { domain ->
               if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
                 val updatedPages = domain.pages.map { page ->
@@ -272,9 +273,9 @@ fun BrowserApp() {
                 }
                 val newDomainScore = maxOf(0.0f, domain.affinityScore - 0.02f)
                 val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
-                activeDomainObject = updatedDomain
-                activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Downvoted! Page affinity: %.2f (Domain: %.2f)".format(activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+                BrowserState.activeDomainObject = updatedDomain
+                BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+                android.widget.Toast.makeText(context, "Downvoted! Page affinity: %.2f (Domain: %.2f)".format(BrowserState.activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
                 updatedDomain
               } else domain
             }
@@ -286,19 +287,24 @@ fun BrowserApp() {
       BrowserAction.SNOOZE -> {
         val now = System.currentTimeMillis()
         val snoozeDuration = 1000L * 60 * 60 // 1 hour
-        activePageObject?.let { activePage ->
-          activeDomainObject?.let { activeDomain ->
+        BrowserState.activePageObject?.let { activePage ->
+          ignoreReadTrackingForPage = activePage.path
+          BrowserState.activeDomainObject?.let { activeDomain ->
             BrowserState.domainsList = BrowserState.domainsList.map { domain ->
               if (domain.url.equals(activeDomain.url, ignoreCase = true)) {
                 val updatedPages = domain.pages.map { page ->
                   if (page.path.equals(activePage.path, ignoreCase = true)) {
-                    page.copy(snoozeTimestamp = now + snoozeDuration)
+                    page.copy(
+                        snoozeTimestamp = now + snoozeDuration,
+                        snoozeCount = page.snoozeCount + 1,
+                        successiveReadCount = 0
+                    )
                   } else page
                 }
                 val updatedDomain = domain.copy(pages = updatedPages)
-                activeDomainObject = updatedDomain
-                activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Snoozed ${activePage.name} for 1 Hour!", android.widget.Toast.LENGTH_SHORT).show()
+                BrowserState.activeDomainObject = updatedDomain
+                BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
+                android.widget.Toast.makeText(context, "Snoozed ${activePage.name} (Count: ${BrowserState.activePageObject?.snoozeCount})", android.widget.Toast.LENGTH_SHORT).show()
                 updatedDomain
               } else domain
             }
@@ -313,8 +319,8 @@ fun BrowserApp() {
         if (result != null) {
           val (selDomain, selPage, updatedDomains) = result
           BrowserState.domainsList = updatedDomains
-          activeDomainObject = selDomain
-          activePageObject = selPage
+          BrowserState.activeDomainObject = selDomain
+          BrowserState.activePageObject = selPage
           val fullUrl = selDomain.url + selPage.path
           currentUrl = fullUrl
           webViewInstance?.loadUrl(fullUrl)
@@ -348,21 +354,19 @@ fun BrowserApp() {
           currentUrl.endsWith(page.path, ignoreCase = true)
         }
         if (matchedPage != null) {
-          activeDomainObject = domain
-          activePageObject = matchedPage
+          BrowserState.activeDomainObject = domain
+          BrowserState.activePageObject = matchedPage
           foundMatch = true
           break
         }
       }
     }
     if (!foundMatch) {
-      activeDomainObject = null
-      activePageObject = null
+      BrowserState.activeDomainObject = null
+      BrowserState.activePageObject = null
     }
   }
 
-  var activeBookmarkId by remember { mutableIntStateOf(1) }
-  var editingBookmark by remember { mutableStateOf<Bookmark?>(null) }
   var showGoToUrlDialog by remember { mutableStateOf(false) }
   val frictionThreshold = 250f
   var isGestureActive by remember { mutableStateOf(true) }
@@ -551,6 +555,11 @@ fun BrowserApp() {
                   BadgedBox(badge = { if (cloudValue > 0) Badge { Text(if (cloudValue > 99) "99+" else cloudValue.toString()) } }) {
                     Icon(imageVector = icon, contentDescription = null, tint = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                   }
+                } else if (bookmark.id == 5) {
+                  val snoozeCount = BrowserState.activePageObject?.snoozeCount ?: 0
+                  BadgedBox(badge = { if (snoozeCount > 0) Badge { Text(snoozeCount.toString()) } }) {
+                    Icon(imageVector = icon, contentDescription = null, tint = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                  }
                 } else {
                   Icon(imageVector = icon, contentDescription = null, tint = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 }
@@ -640,6 +649,30 @@ fun BrowserApp() {
                   super.onPageStarted(view, url, favicon)
                   isPageLoading = true
                   url?.let { newUrl ->
+                    // Read Tracking & Snooze Counter Logic
+                    BrowserState.activePageObject?.let { prevPage ->
+                        BrowserState.activeDomainObject?.let { prevDomain ->
+                            if (ignoreReadTrackingForPage != prevPage.path) {
+                                BrowserState.domainsList = BrowserState.domainsList.map { d ->
+                                    if (d.url.equals(prevDomain.url, ignoreCase = true)) {
+                                        val updatedPages = d.pages.map { p ->
+                                            if (p.path.equals(prevPage.path, ignoreCase = true)) {
+                                                val newReadCount = p.successiveReadCount + 1
+                                                val newSnoozeCount = if (newReadCount >= 2) 0 else maxOf(0, p.snoozeCount - 1)
+                                                p.copy(
+                                                    successiveReadCount = if (newReadCount >= 2) 0 else newReadCount,
+                                                    snoozeCount = newSnoozeCount
+                                                )
+                                            } else p
+                                        }
+                                        d.copy(pages = updatedPages)
+                                    } else d
+                                }
+                            }
+                        }
+                    }
+                    ignoreReadTrackingForPage = null
+
                     BrowserState.lastNavigationUrl?.let { oldUrl ->
                         val duration = System.currentTimeMillis() - lastPageStartTime
                         BrowserState.history.find { it.url == oldUrl && it.duration == 0L }?.let { it.duration = duration }

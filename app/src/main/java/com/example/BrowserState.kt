@@ -8,7 +8,9 @@ data class DomainObject(
   val affinityScore: Float = 1.0f,
   val snoozeTimestamp: Long? = null,
   val lastUpdated: Long = System.currentTimeMillis(),
-  val pages: List<PageObject> = emptyList()
+  val pages: List<PageObject> = emptyList(),
+  val snoozeCount: Int = 0,
+  val successiveReadCount: Int = 0
 )
 
 data class PageObject(
@@ -16,7 +18,9 @@ data class PageObject(
   val path: String,
   val affinityScore: Float = 1.0f,
   val snoozeTimestamp: Long? = null,
-  val lastUpdated: Long = System.currentTimeMillis()
+  val lastUpdated: Long = System.currentTimeMillis(),
+  val snoozeCount: Int = 0,
+  val successiveReadCount: Int = 0
 )
 
 data class HistoryEntry(
@@ -74,6 +78,9 @@ object BrowserState {
     
     // To be updated by MainActivity
     var currentUrlToLoad by mutableStateOf<String?>(null)
+
+    var activeDomainObject by mutableStateOf<DomainObject?>(null)
+    var activePageObject by mutableStateOf<PageObject?>(null)
 
     fun addPageToFeed(url: String, title: String) {
         val uri = android.net.Uri.parse(url)
