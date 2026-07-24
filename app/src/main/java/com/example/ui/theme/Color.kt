@@ -10,9 +10,9 @@ val Purple40 = Color(0xFF6650a4)
 val PurpleGrey40 = Color(0xFF625b71)
 val Pink40 = Color(0xFF7D5260)
 
-// Elegant Dark Theme specific colors
-val ElegantBackground = Color(0xFF1C1B1F)
-val ElegantSurface = Color(0xFF2B2930)
-val ElegantOnSurface = Color(0xFFE6E1E5)
-val ElegantPrimary = Color(0xFFD0BCFF)
-val ElegantOnPrimary = Color(0xFF381E72)
+// Malachite Theme Palette
+val MalachiteDarkGreen = Color(0xFF002200) // Deep Dark Green
+val MalachiteLightGold = Color(0xFFFFD700) // Classic Gold
+val MalachiteLightGreen = Color(0xFF44FF44) // Bright Trim Green
+val MalachiteSurfaceGreen = Color(0xFF003300) // Slightly lighter for cards/surfaces
+val MalachiteOnSurfaceGold = Color(0xFFFFE135) // Lighter gold for high contrast text

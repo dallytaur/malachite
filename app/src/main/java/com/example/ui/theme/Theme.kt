@@ -10,44 +10,46 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
+import androidx.compose.material3.Shapes
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
+
+private val MalachiteShapes = Shapes(
+    extraSmall = RoundedCornerShape(2.dp),
+    small = RoundedCornerShape(2.dp),
+    medium = RoundedCornerShape(2.dp),
+    large = RoundedCornerShape(2.dp),
+    extraLarge = RoundedCornerShape(2.dp)
+)
+
 private val DarkColorScheme =
   darkColorScheme(
-    primary = ElegantPrimary,
-    onPrimary = ElegantOnPrimary,
-    secondary = PurpleGrey80,
-    tertiary = Pink80,
-    background = ElegantBackground,
-    surface = ElegantSurface,
-    onBackground = ElegantOnSurface,
-    onSurface = ElegantOnSurface,
-    surfaceVariant = ElegantSurface,
-    onSurfaceVariant = ElegantOnSurface
-  )
-
-private val LightColorScheme =
-  lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    primary = MalachiteLightGold,
+    onPrimary = MalachiteDarkGreen,
+    secondary = MalachiteLightGreen,
+    onSecondary = MalachiteDarkGreen,
+    tertiary = MalachiteLightGreen,
+    background = MalachiteDarkGreen,
+    surface = MalachiteSurfaceGreen,
+    onBackground = MalachiteOnSurfaceGold,
+    onSurface = MalachiteOnSurfaceGold,
+    surfaceVariant = MalachiteDarkGreen,
+    onSurfaceVariant = MalachiteLightGold,
+    outline = MalachiteLightGreen
   )
 
 @Composable
 fun MyApplicationTheme(
-  darkTheme: Boolean = true, // Force dark Elegant theme
-  dynamicColor: Boolean = false, // Disable dynamic colors to preserve "Elegant Dark" branding
+  darkTheme: Boolean = true, // Force Malachite Dark
+  dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   val colorScheme = DarkColorScheme
 
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+  MaterialTheme(
+      colorScheme = colorScheme, 
+      typography = Typography, 
+      shapes = MalachiteShapes,
+      content = content
+  )
 }

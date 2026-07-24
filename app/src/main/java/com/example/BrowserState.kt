@@ -2,16 +2,22 @@ package com.example
 
 import androidx.compose.runtime.*
 
+import org.mozilla.geckoview.GeckoSession
+
+import com.squareup.moshi.JsonClass
+
 enum class AppColorGroup {
     RED, YELLOW, GREEN, BLUE
 }
 
+@JsonClass(generateAdapter = true)
 data class AffinitySettings(
     var modifier: Float = 0.0f,
     var snoozeMinutes: Int = 5
 )
 
 // Data structures for tracking and managing user affinity & snooze preferences per domain
+@JsonClass(generateAdapter = true)
 data class DomainObject(
   val url: String,
   var affinityScore: Float = 1.0f, // Soft votes
@@ -24,6 +30,7 @@ data class DomainObject(
   val customScrollLimitPx: Int? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class PageObject(
   val name: String,
   val path: String,
@@ -36,6 +43,7 @@ data class PageObject(
   val lastUpdated: Long = System.currentTimeMillis()
 )
 
+@JsonClass(generateAdapter = true)
 data class HistoryEntry(
     val url: String,
     val title: String,
@@ -45,7 +53,41 @@ data class HistoryEntry(
     val isFromSwipe: Boolean = false
 )
 
+@JsonClass(generateAdapter = true)
+data class UserProfile(
+    val email: String,
+    val displayName: String
+)
+
+@JsonClass(generateAdapter = true)
+data class GroupSettings(
+    val multiplier: Float,
+    val snoozeMinutes: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class BrowserDatabase(
+    val domainsList: List<DomainObject>,
+    val globalSettings: AffinitySettings,
+    val history: List<HistoryEntry>,
+    val swipeRightNext: Boolean,
+    val swipeLeftNext: Boolean,
+    val doubleTapNext: Boolean,
+    val groupSettings: Map<AppColorGroup, GroupSettings>
+)
+
+data class SessionEntry(
+    val url: String,
+    val session: GeckoSession,
+    var title: String = "Loading...",
+    var progress: Int = 0,
+    var isLoading: Boolean = false
+)
+
 object BrowserState {
+    // Identity State
+    var userProfile by mutableStateOf<UserProfile?>(null)
+
     // Global Defaults
     var globalSettings by mutableStateOf(AffinitySettings(modifier = 0f, snoozeMinutes = 5))
     
@@ -53,6 +95,13 @@ object BrowserState {
     var globalTimeLimitSeconds by mutableIntStateOf(300)
     var globalScrollLimitPx by mutableIntStateOf(5000)
     var exitSnoozeMinutes by mutableIntStateOf(5)
+
+    // Buffer Settings
+    var forwardBufferCount by mutableIntStateOf(3)
+    var historyBufferCount by mutableIntStateOf(5)
+    
+    // Live Sessions Buffer
+    val sessionsBuffer = mutableStateListOf<SessionEntry>()
 
     // UI Tweaks
     var swipeRightNext by mutableStateOf(false)
@@ -66,10 +115,10 @@ object BrowserState {
     // Group / Channel Settings (Multipliers and Snooze)
     // Blue (Best), Green (Good), Yellow (Careful), Red (Addictive)
     var groupSettings by mutableStateOf(mapOf(
-        AppColorGroup.BLUE to Pair(2.0f, 1),    // Best: 2.0x probability, 1m guard
-        AppColorGroup.GREEN to Pair(1.5f, 5),   // Good: 1.5x probability, 5m guard
-        AppColorGroup.YELLOW to Pair(0.7f, 15), // Careful: 0.7x probability, 15m guard
-        AppColorGroup.RED to Pair(0.3f, 60)     // Addictive: 0.3x probability, 60m guard
+        AppColorGroup.BLUE to GroupSettings(2.0f, 1),    // Best: 2.0x probability, 1m guard
+        AppColorGroup.GREEN to GroupSettings(1.5f, 5),   // Good: 1.5x probability, 5m guard
+        AppColorGroup.YELLOW to GroupSettings(0.7f, 15), // Careful: 0.7x probability, 15m guard
+        AppColorGroup.RED to GroupSettings(0.3f, 60)     // Addictive: 0.3x probability, 60m guard
     ))
 
     var domainsList by mutableStateOf(
@@ -84,6 +133,9 @@ object BrowserState {
     )
 
     val SuggestedLibrary = listOf(
+        // --- MALACHITE SYSTEM ---
+        createDomain("malachite://welcome", AppColorGroup.BLUE, listOf(createPage("Malachite Setup", ""))),
+
         // --- BLUE: BEST (AI, Dev, Reference) ---
         createDomain("https://gemini.google.com", AppColorGroup.BLUE, listOf(createPage("Gemini", ""))),
         createDomain("https://perplexity.ai", AppColorGroup.BLUE, listOf(createPage("Perplexity", ""))),
