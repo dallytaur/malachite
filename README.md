@@ -1,21 +1,43 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Malachite Browser
 
-# Run and deploy your AI Studio app
+"Use the brainrot to destroy the brainrot."
 
-This contains everything you need to run your app locally.
+Malachite is a high-density, professional "command center" browser designed specifically for users with ADHD. It re-directs addictive swipe habits toward productive content through an infinite vertical feed and a weighted probability engine.
 
-View your app in AI Studio: https://ai.studio/apps/4bd4e325-eab1-4d43-bf86-f580381c5988
+## Mission
+Most modern platforms are designed to keep you scrolling through low-value content. Malachite flips the script by using those same mechanics (vertical paging, haptic feedback, infinite buffers) to serve you the content you *actually* want to consume—AI tools, documentation, dev-tools, and learning resources.
 
-## Run Locally
+## Key Features
+- **Infinite Vertical Feed:** Powered by GeckoView, managing multiple live sessions simultaneously.
+- **Weighted Probability Engine (RYGB):**
+    - **BLUE (Best):** 2.0x probability (AI, Dev Tools, Learning).
+    - **GREEN (Good):** 1.5x probability (Productivity & Search).
+    - **YELLOW (Careful):** 0.7x probability (News & Shopping).
+    - **RED (Addictive):** 0.3x probability (Social Media & Gaming).
+- **Zero Dead Space UI:** A high-information-density layout with 2.dp corner radii for a sharp, utilitarian look.
+- **Dual-Buffer System:** Maintains a 5-page history and 3-page forward buffer for instant swipes and recovery.
+- **Precision Controls:** Every setting is tunable with incremental +/- controls for fine-grained affinity adjustment.
+- **Data Portability:** Full persistence with JSON export/import functionality.
+- **Engine Hardening:** Modern Firefox 151+ identity, tracking protection, and online uBlock Origin installation.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+## Tech Stack
+- **Engine:** Mozilla GeckoView
+- **UI:** Jetpack Compose (Material 3)
+- **Architecture:** Single-Activity with global singleton state
+- **Persistence:** Moshi JSON Serialization
 
+## Build & Deploy
+Malachite supports **x86_64**, **arm64-v8a**, and **armeabi-v7a** architectures.
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+### Prerequisites
+- Android Studio Ladybug+
+- JDK 17+
+
+### Steps
+1. Clone the repository.
+2. Open in Android Studio.
+3. Sync Gradle.
+4. Build `app:assembleDebug` or `app:assembleRelease`.
+
+## License
+This project is licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.
