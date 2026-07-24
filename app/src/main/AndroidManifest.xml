@@ -24,6 +24,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".HistoryActivity"
+            android:label="History"
+            android:theme="@style/Theme.MyApplication" />
+
+        <activity
+            android:name=".SettingsActivity"
+            android:label="Settings"
+            android:theme="@style/Theme.MyApplication" />
+
+        <activity
+            android:name=".FavoritesListingActivity"
+            android:label="Favorites"
+            android:theme="@style/Theme.MyApplication" />
+
+        <activity
+            android:name=".AddActivity"
+            android:label="Add Panel"
+            android:theme="@style/Theme.MyApplication" />
     </application>
 
 </manifest>
