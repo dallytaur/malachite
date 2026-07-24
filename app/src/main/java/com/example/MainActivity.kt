@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ViewGroup
+import android.view.View
+import android.view.autofill.AutofillManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -67,9 +69,17 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+
+    // First launch check
+    val prefs = getSharedPreferences("minima_browser_prefs", Context.MODE_PRIVATE)
+    val isFirstLaunch = prefs.getBoolean("is_first_launch", true)
+    if (isFirstLaunch) {
+      prefs.edit().putBoolean("is_first_launch", false).apply()
+    }
+
     setContent {
       MyApplicationTheme {
-        BrowserApp()
+        BrowserApp(isFirstLaunch = isFirstLaunch)
       }
     }
   }
@@ -131,26 +141,20 @@ fun selectNextPage(
   }
 
   while (remainingDomains.isNotEmpty()) {
-    // Perform weighted random selection of Domain
-    val totalDomainWeight = remainingDomains.sumOf { it.affinityScore.toDouble() }
-    if (totalDomainWeight <= 0.0) {
-      val selectedDomain = remainingDomains.randomOrNull() ?: break
-      val page = pickWeightedPageForDomain(selectedDomain, currentTime)
-      if (page != null) {
-        return Triple(selectedDomain, page, updatedDomains)
-      } else {
-        remainingDomains = remainingDomains - selectedDomain
-        continue
-      }
+    // Calculate Effective Weights for Domains: Soft + Domain Hard + Global Offset
+    val weights = remainingDomains.map { domain ->
+        maxOf(0.01f, domain.affinityScore + domain.settings.modifier + BrowserState.globalSettings.modifier)
     }
+    
+    val totalDomainWeight = weights.sum().toDouble()
     
     val randomValue = kotlin.random.Random.nextDouble() * totalDomainWeight
     var accumulatedWeight = 0.0
     var selectedDomain: DomainObject? = null
-    for (domain in remainingDomains) {
-      accumulatedWeight += domain.affinityScore
+    for (i in remainingDomains.indices) {
+      accumulatedWeight += weights[i]
       if (randomValue <= accumulatedWeight) {
-        selectedDomain = domain
+        selectedDomain = remainingDomains[i]
         break
       }
     }
@@ -174,33 +178,36 @@ fun pickWeightedPageForDomain(domain: DomainObject, currentTime: Long): PageObje
   }
   if (validPages.isEmpty()) return null
   
-  val totalPageWeight = validPages.sumOf { page -> page.affinityScore.toDouble() }
-  if (totalPageWeight <= 0.0) {
-    return validPages.randomOrNull()
+  // Calculate Effective Weights for Pages: (Soft + Page Hard + Global Offset) * Group Multiplier
+  val weights = validPages.map { page ->
+      val multiplier = BrowserState.groupSettings[page.assignedColorGroup]?.first ?: 1.0f
+      maxOf(0.01f, (page.affinityScore + page.settings.modifier + BrowserState.globalSettings.modifier) * multiplier)
   }
+  
+  val totalPageWeight = weights.sum().toDouble()
   
   val randomValue = kotlin.random.Random.nextDouble() * totalPageWeight
   var accumulatedWeight = 0.0
-  for (page in validPages) {
-    accumulatedWeight += page.affinityScore
+  for (i in validPages.indices) {
+    accumulatedWeight += weights[i]
     if (randomValue <= accumulatedWeight) {
-      return page
+      return validPages[i]
     }
   }
   return validPages.last()
 }
 
-// History tracking
+// History tracking constants
 private var lastPageStartTime = System.currentTimeMillis()
 private var lastNavigationContext = "Direct"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun BrowserApp() {
+fun BrowserApp(isFirstLaunch: Boolean = false) {
   val context = LocalContext.current
   val sharedPrefs = remember { context.getSharedPreferences("minima_browser_prefs", Context.MODE_PRIVATE) }
 
-  var currentUrl by remember { mutableStateOf("https://www.google.com") }
+  var currentUrl by remember { mutableStateOf(if (isFirstLaunch) "malachite://welcome" else "https://www.google.com") }
   var pageTitle by remember { mutableStateOf("Loading...") }
   var progress by remember { mutableIntStateOf(0) }
   var isPageLoading by remember { mutableStateOf(false) }
@@ -231,9 +238,10 @@ fun BrowserApp() {
 
   var activeBookmarkId by remember { mutableIntStateOf(1) }
   var editingBookmark by remember { mutableStateOf<Bookmark?>(null) }
+  var contextMenuData by remember { mutableStateOf<String?>(null) } // URL if it's a link
 
   // --- Universal Dispatcher ---
-  val dispatchAction = { action: BrowserAction, contextStr: String ->
+  val dispatchAction = { action: BrowserAction, contextStr: String, overrideSnoozeMinutes: Int? ->
     lastNavigationContext = contextStr
     when (action) {
       BrowserAction.UPVOTE -> {
@@ -247,17 +255,14 @@ fun BrowserApp() {
                     page.copy(affinityScore = minOf(2.0f, page.affinityScore + 0.02f), lastUpdated = now)
                   } else page
                 }
-                val newDomainScore = minOf(2.0f, domain.affinityScore + 0.02f)
-                val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
+                val updatedDomain = domain.copy(affinityScore = minOf(2.0f, domain.affinityScore + 0.02f), lastUpdated = now, pages = updatedPages)
                 BrowserState.activeDomainObject = updatedDomain
                 BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Upvoted! Page affinity: %.2f (Domain: %.2f)".format(BrowserState.activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, "Upvoted! Page: %.2f".format(BrowserState.activePageObject?.affinityScore ?: 0f), android.widget.Toast.LENGTH_SHORT).show()
                 updatedDomain
               } else domain
             }
           }
-        } ?: run {
-          android.widget.Toast.makeText(context, "Upvoted! (Load Feed to change specific page affinities)", android.widget.Toast.LENGTH_SHORT).show()
         }
       }
       BrowserAction.DOWNVOTE -> {
@@ -271,23 +276,23 @@ fun BrowserApp() {
                     page.copy(affinityScore = maxOf(0.0f, page.affinityScore - 0.02f), lastUpdated = now)
                   } else page
                 }
-                val newDomainScore = maxOf(0.0f, domain.affinityScore - 0.02f)
-                val updatedDomain = domain.copy(affinityScore = newDomainScore, lastUpdated = now, pages = updatedPages)
+                val updatedDomain = domain.copy(affinityScore = maxOf(0.0f, domain.affinityScore - 0.02f), lastUpdated = now, pages = updatedPages)
                 BrowserState.activeDomainObject = updatedDomain
                 BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Downvoted! Page affinity: %.2f (Domain: %.2f)".format(BrowserState.activePageObject?.affinityScore ?: 0f, updatedDomain.affinityScore), android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, "Downvoted! Page: %.2f".format(BrowserState.activePageObject?.affinityScore ?: 0f), android.widget.Toast.LENGTH_SHORT).show()
                 updatedDomain
               } else domain
             }
           }
-        } ?: run {
-          android.widget.Toast.makeText(context, "Downvoted! (Load Feed to change specific page affinities)", android.widget.Toast.LENGTH_SHORT).show()
         }
       }
       BrowserAction.SNOOZE -> {
         val now = System.currentTimeMillis()
-        val snoozeDuration = 1000L * 60 * 60 // 1 hour
         BrowserState.activePageObject?.let { activePage ->
+          val groupSnooze = BrowserState.groupSettings[activePage.assignedColorGroup]?.second ?: BrowserState.globalSettings.snoozeMinutes
+          val minutes = overrideSnoozeMinutes ?: activePage.settings.snoozeMinutes
+          val durationMs = minutes.toLong() * 60 * 1000
+          
           ignoreReadTrackingForPage = activePage.path
           BrowserState.activeDomainObject?.let { activeDomain ->
             BrowserState.domainsList = BrowserState.domainsList.map { domain ->
@@ -295,7 +300,7 @@ fun BrowserApp() {
                 val updatedPages = domain.pages.map { page ->
                   if (page.path.equals(activePage.path, ignoreCase = true)) {
                     page.copy(
-                        snoozeTimestamp = now + snoozeDuration,
+                        snoozeTimestamp = now + durationMs,
                         snoozeCount = page.snoozeCount + 1,
                         successiveReadCount = 0
                     )
@@ -304,13 +309,13 @@ fun BrowserApp() {
                 val updatedDomain = domain.copy(pages = updatedPages)
                 BrowserState.activeDomainObject = updatedDomain
                 BrowserState.activePageObject = updatedDomain.pages.find { it.path.equals(activePage.path, ignoreCase = true) }
-                android.widget.Toast.makeText(context, "Snoozed ${activePage.name} (Count: ${BrowserState.activePageObject?.snoozeCount})", android.widget.Toast.LENGTH_SHORT).show()
+                if (overrideSnoozeMinutes == null) {
+                    android.widget.Toast.makeText(context, "Snoozed for ${minutes}m (Count: ${BrowserState.activePageObject?.snoozeCount})", android.widget.Toast.LENGTH_SHORT).show()
+                }
                 updatedDomain
               } else domain
             }
           }
-        } ?: run {
-          android.widget.Toast.makeText(context, "Snoozed current page for 1 hour!", android.widget.Toast.LENGTH_SHORT).show()
         }
       }
       BrowserAction.NEXT_PAGE -> {
@@ -324,16 +329,11 @@ fun BrowserApp() {
           val fullUrl = selDomain.url + selPage.path
           currentUrl = fullUrl
           webViewInstance?.loadUrl(fullUrl)
-          android.widget.Toast.makeText(
-            context,
-            "Feed Selected: ${selPage.name} (Domain: %.2f, Page: %.2f)".format(selDomain.affinityScore, selPage.affinityScore),
-            android.widget.Toast.LENGTH_SHORT
-          ).show()
         } else {
           BrowserState.domainsList = BrowserState.domainsList.map { d ->
             d.copy(snoozeTimestamp = null, pages = d.pages.map { p -> p.copy(snoozeTimestamp = null) })
           }
-          android.widget.Toast.makeText(context, "All feeds are snoozed! Cleared all snoozes. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+          android.widget.Toast.makeText(context, "Cleared all snoozes.", android.widget.Toast.LENGTH_SHORT).show()
         }
       }
       BrowserAction.REFRESH -> webViewInstance?.reload()
@@ -394,9 +394,8 @@ fun BrowserApp() {
       delay(500)
       haptic.performHapticFeedback(HapticFeedbackType.LongPress)
       haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-      // Add to favorites logic
       currentUrl.let { url ->
-        BrowserState.addPageToFeed(url, pageTitle) // Or a specific favorites list
+        BrowserState.addPageToFeed(url, pageTitle)
         android.widget.Toast.makeText(context, "Added to Favorites!", android.widget.Toast.LENGTH_SHORT).show()
       }
     }
@@ -412,12 +411,10 @@ fun BrowserApp() {
       isAnimating = true
       scope.launch {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        // Slide OUT top
+        dispatchAction(BrowserAction.SNOOZE, "Swipe Feed", BrowserState.exitSnoozeMinutes)
         offsetY.animateTo(-screenHeightPx, animationSpec = tween(300))
-        dispatchAction(BrowserAction.NEXT_PAGE, "Swipe Feed")
-        // Prepare at bottom
+        dispatchAction(BrowserAction.NEXT_PAGE, "Swipe Feed", null)
         offsetY.snapTo(screenHeightPx)
-        // Slide IN from bottom
         offsetY.animateTo(0f, animationSpec = tween(300))
         isAnimating = false
       }
@@ -429,15 +426,13 @@ fun BrowserApp() {
       isAnimating = true
       scope.launch {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        // Fly off Left
+        dispatchAction(BrowserAction.SNOOZE, "Gesture Downvote", BrowserState.exitSnoozeMinutes)
         offsetX.animateTo(-screenWidthPx, animationSpec = tween(300))
         rotation.animateTo(-15f, animationSpec = tween(300))
-        dispatchAction(BrowserAction.DOWNVOTE, "Gesture Downvote")
-        dispatchAction(BrowserAction.NEXT_PAGE, "Swipe Feed")
-        // Reset horizontal
+        dispatchAction(BrowserAction.DOWNVOTE, "Gesture Downvote", null)
+        dispatchAction(BrowserAction.NEXT_PAGE, "Swipe Feed", null)
         offsetX.snapTo(0f)
         rotation.snapTo(0f)
-        // Enter from bottom
         offsetY.snapTo(screenHeightPx)
         offsetY.animateTo(0f, animationSpec = tween(300))
         isAnimating = false
@@ -450,12 +445,41 @@ fun BrowserApp() {
       isAnimating = true
       scope.launch {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        dispatchAction(BrowserAction.UPVOTE, "Gesture Upvote")
-        // Spring back to center
-        launch { offsetX.animateTo(0f, animationSpec = spring()) }
-        launch { rotation.animateTo(0f, animationSpec = spring()) }
+        dispatchAction(BrowserAction.UPVOTE, "Gesture Upvote", null)
+        if (BrowserState.swipeRightNext) {
+            dispatchAction(BrowserAction.SNOOZE, "Gesture Upvote", BrowserState.exitSnoozeMinutes)
+            offsetX.animateTo(screenWidthPx, animationSpec = tween(300))
+            dispatchAction(BrowserAction.NEXT_PAGE, "Swipe Feed", null)
+            offsetX.snapTo(0f)
+            offsetY.snapTo(screenHeightPx)
+            offsetY.animateTo(0f, animationSpec = tween(300))
+        } else {
+            launch { offsetX.animateTo(0f, animationSpec = spring()) }
+            launch { rotation.animateTo(0f, animationSpec = spring()) }
+        }
         isAnimating = false
       }
+    }
+  }
+
+  var currentUrlTimeSeconds by remember { mutableIntStateOf(0) }
+  var currentUrlScrollPx by remember { mutableIntStateOf(0) }
+
+  LaunchedEffect(isPageLoading) {
+    if (!isPageLoading) {
+        BrowserState.isLimitReached = false
+        while (true) {
+            delay(1000)
+            currentUrlTimeSeconds += 1
+            BrowserState.activeDomainObject?.let { domain ->
+                val multiplier = BrowserState.groupSettings[domain.defaultColorGroup]?.first ?: 1.0f
+                val effectiveTimeLimit = domain.customTimeLimitSeconds ?: (BrowserState.globalTimeLimitSeconds * multiplier).toInt()
+                
+                if (currentUrlTimeSeconds >= effectiveTimeLimit) {
+                    BrowserState.isLimitReached = true
+                }
+            }
+        }
     }
   }
 
@@ -466,23 +490,15 @@ fun BrowserApp() {
   Scaffold(
     modifier = Modifier.fillMaxSize(),
     topBar = {
-      Surface(
-        tonalElevation = 4.dp,
-        shadowElevation = 2.dp,
-        color = MaterialTheme.colorScheme.surface
-      ) {
+      Surface(tonalElevation = 4.dp, shadowElevation = 2.dp, color = MaterialTheme.colorScheme.surface) {
         Column {
           Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
-          Row(
-            modifier = Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
+          Row(modifier = Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-              IconButton(onClick = { dispatchAction(BrowserAction.GO_BACK, "Manual Back") }, enabled = webViewInstance?.canGoBack() == true) {
+              IconButton(onClick = { dispatchAction(BrowserAction.GO_BACK, "Manual Back", null) }, enabled = webViewInstance?.canGoBack() == true) {
                 Icon(imageVector = Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
               }
-              IconButton(onClick = { dispatchAction(BrowserAction.GO_FORWARD, "Manual Forward") }, enabled = webViewInstance?.canGoForward() == true) {
+              IconButton(onClick = { dispatchAction(BrowserAction.GO_FORWARD, "Manual Forward", null) }, enabled = webViewInstance?.canGoForward() == true) {
                 Icon(imageVector = Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = "Forward")
               }
             }
@@ -491,7 +507,7 @@ fun BrowserApp() {
               IconButton(onClick = { isGestureActive = !isGestureActive }) {
                 Icon(imageVector = if (isGestureActive) Icons.Default.Lock else Icons.Default.Language, contentDescription = "Toggle Gestures")
               }
-              IconButton(onClick = { dispatchAction(BrowserAction.REFRESH, "Manual Refresh") }) {
+              IconButton(onClick = { dispatchAction(BrowserAction.REFRESH, "Manual Refresh", null) }) {
                 Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh")
               }
               IconButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
@@ -499,25 +515,14 @@ fun BrowserApp() {
               }
             }
           }
-          if (isPageLoading) {
-            LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(2.dp))
-          } else {
-            Box(modifier = Modifier.height(2.dp))
-          }
+          if (isPageLoading) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(2.dp))
+          else Box(modifier = Modifier.height(2.dp))
         }
       }
     },
     bottomBar = {
-      Surface(
-        tonalElevation = 8.dp,
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 8.dp),
-          horizontalArrangement = Arrangement.SpaceEvenly,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
+      Surface(tonalElevation = 8.dp, color = MaterialTheme.colorScheme.surface, modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
           bookmarks.forEach { bookmark ->
             val isActive = activeBookmarkId == bookmark.id
             val icon = when (bookmark.id) {
@@ -537,7 +542,6 @@ fun BrowserApp() {
                       activeBookmarkId = bookmark.id
                       when (bookmark.id) {
                         1 -> context.startActivity(Intent(context, FavoritesListingActivity::class.java))
-                        2 -> { /* Cloud badge info */ }
                         3 -> context.startActivity(Intent(context, AddActivity::class.java))
                         4 -> context.startActivity(Intent(context, HistoryActivity::class.java))
                         5 -> context.startActivity(Intent(context, SettingsActivity::class.java))
@@ -572,84 +576,115 @@ fun BrowserApp() {
   ) { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
       Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        AndroidView(
-          factory = { context ->
+        if (currentUrl == "malachite://welcome") {
+          WelcomePageContent(onNavigate = { url ->
+            currentUrl = url
+            webViewInstance?.loadUrl(url)
+          })
+        } else {
+          AndroidView(
+            factory = { context ->
             object : WebView(context) {
               private var lastY = 0f
               private var lastX = 0f
+              private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                  if (BrowserState.doubleTapNext) { triggerNextPageVertical(); return true }
+                  return false
+                }
+              })
               override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-                if (isGestureActive && !isAnimating) {
-                  when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                      lastY = event.rawY
-                      lastX = event.rawX
-                      startHoldTimer()
+                if (BrowserState.isLimitReached) {
+                    // Only allow vertical movement for the exit swipe
+                    gestureDetector.onTouchEvent(event)
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> { lastY = event.rawY }
+                        MotionEvent.ACTION_MOVE -> {
+                            val deltaY = lastY - event.rawY
+                            lastY = event.rawY
+                            if (deltaY > 0) { // Swiping UP
+                                scope.launch { offsetY.snapTo(offsetY.value - deltaY * 0.8f) }
+                                if (kotlin.math.abs(offsetY.value) > frictionThreshold) triggerNextPageVertical()
+                            }
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            if (kotlin.math.abs(offsetY.value) < frictionThreshold) scope.launch { offsetY.animateTo(0f, spring()) }
+                        }
                     }
+                    return true // Lock internal scrolling
+                }
+                
+                if (isGestureActive && !isAnimating) {
+                  gestureDetector.onTouchEvent(event)
+                  when (event.action) {
+                    MotionEvent.ACTION_DOWN -> { lastY = event.rawY; lastX = event.rawX; startHoldTimer() }
                     MotionEvent.ACTION_MOVE -> {
                       val deltaY = lastY - event.rawY
                       val deltaX = event.rawX - lastX
                       lastY = event.rawY
                       lastX = event.rawX
-
-                      if (kotlin.math.abs(deltaX) > 10 || kotlin.math.abs(deltaY) > 10) {
-                        cancelHoldTimer()
-                      }
-
-                      // Horizontal Swipe (Tinder Card)
+                      if (kotlin.math.abs(deltaX) > 10 || kotlin.math.abs(deltaY) > 10) cancelHoldTimer()
                       if (kotlin.math.abs(offsetX.value) > 10 || (kotlin.math.abs(deltaX) > kotlin.math.abs(deltaY) * 1.5)) {
-                        scope.launch {
-                          offsetX.snapTo(offsetX.value + deltaX)
-                          rotation.snapTo(offsetX.value / 25f)
-                        }
+                        scope.launch { offsetX.snapTo(offsetX.value + deltaX); rotation.snapTo(offsetX.value / 25f) }
                         return true
                       }
-
-                      // Vertical Friction (TikTok Transition)
                       if (!canScrollVertically(1) && deltaY > 0) {
                         scope.launch { offsetY.snapTo(offsetY.value - deltaY * 0.6f) }
-                        if (kotlin.math.abs(offsetY.value) > frictionThreshold) {
-                          triggerNextPageVertical()
-                        }
+                        if (kotlin.math.abs(offsetY.value) > frictionThreshold) triggerNextPageVertical()
                         return true
                       } else if (offsetY.value < 0 && deltaY < 0) {
                         scope.launch { offsetY.snapTo(minOf(0f, offsetY.value - deltaY)) }
                         return true
                       }
+                      if (deltaY > 0) {
+                          currentUrlScrollPx += deltaY.toInt()
+                          BrowserState.activeDomainObject?.let { domain ->
+                              val multiplier = BrowserState.groupSettings[domain.defaultColorGroup]?.first ?: 1.0f
+                              val effectiveScrollLimit = domain.customScrollLimitPx ?: (BrowserState.globalScrollLimitPx * multiplier).toInt()
+                              if (currentUrlScrollPx >= effectiveScrollLimit && !isAnimating) {
+                                  BrowserState.isLimitReached = true
+                              }
+                          }
+                      }
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                       cancelHoldTimer()
-                      if (offsetX.value > 200) {
-                        triggerUpvoteHorizontal()
-                      } else if (offsetX.value < -200) {
-                        triggerDownvoteHorizontal()
-                      } else {
-                        scope.launch {
-                          launch { offsetX.animateTo(0f, spring()) }
-                          launch { rotation.animateTo(0f, spring()) }
-                        }
-                      }
-                      
-                      if (kotlin.math.abs(offsetY.value) < frictionThreshold) {
-                        scope.launch { offsetY.animateTo(0f, spring()) }
-                      }
+                      if (offsetX.value > 200) triggerUpvoteHorizontal()
+                      else if (offsetX.value < -200) triggerDownvoteHorizontal()
+                      else scope.launch { launch { offsetX.animateTo(0f, spring()) }; launch { rotation.animateTo(0f, spring()) } }
+                      if (kotlin.math.abs(offsetY.value) < frictionThreshold) scope.launch { offsetY.animateTo(0f, spring()) }
                     }
                   }
                 }
                 return super.dispatchTouchEvent(event)
               }
             }.apply {
-              layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-              )
+              layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+              if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                  importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+              }
               settings.javaScriptEnabled = true
               settings.domStorageEnabled = true
+              
+              setOnLongClickListener { 
+                  val hitTestResult = hitTestResult
+                  val url = hitTestResult.extra
+                  contextMenuData = url ?: "" // Empty string means "general page"
+                  true
+              }
+
               webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                   super.onPageStarted(view, url, favicon)
                   isPageLoading = true
                   url?.let { newUrl ->
-                    // Read Tracking & Snooze Counter Logic
+                    val isFromSwipe = lastNavigationContext == "Swipe Feed"
+                    if (isFromSwipe) {
+                        BrowserState.rootPageUrl = newUrl
+                        currentUrlTimeSeconds = 0
+                        currentUrlScrollPx = 0
+                    }
+                    
                     BrowserState.activePageObject?.let { prevPage ->
                         BrowserState.activeDomainObject?.let { prevDomain ->
                             if (ignoreReadTrackingForPage != prevPage.path) {
@@ -659,10 +694,7 @@ fun BrowserApp() {
                                             if (p.path.equals(prevPage.path, ignoreCase = true)) {
                                                 val newReadCount = p.successiveReadCount + 1
                                                 val newSnoozeCount = if (newReadCount >= 2) 0 else maxOf(0, p.snoozeCount - 1)
-                                                p.copy(
-                                                    successiveReadCount = if (newReadCount >= 2) 0 else newReadCount,
-                                                    snoozeCount = newSnoozeCount
-                                                )
+                                                p.copy(successiveReadCount = if (newReadCount >= 2) 0 else newReadCount, snoozeCount = newSnoozeCount)
                                             } else p
                                         }
                                         d.copy(pages = updatedPages)
@@ -672,14 +704,13 @@ fun BrowserApp() {
                         }
                     }
                     ignoreReadTrackingForPage = null
-
                     BrowserState.lastNavigationUrl?.let { oldUrl ->
                         val duration = System.currentTimeMillis() - lastPageStartTime
                         BrowserState.history.find { it.url == oldUrl && it.duration == 0L }?.let { it.duration = duration }
                     }
                     lastPageStartTime = System.currentTimeMillis()
                     BrowserState.lastNavigationUrl = newUrl
-                    BrowserState.history.add(0, HistoryEntry(url = newUrl, title = view?.title ?: "Loading...", timestamp = lastPageStartTime, parentContext = lastNavigationContext, isFromSwipe = lastNavigationContext == "Swipe Feed"))
+                    BrowserState.history.add(0, HistoryEntry(url = newUrl, title = view?.title ?: "Loading...", timestamp = lastPageStartTime, parentContext = lastNavigationContext, isFromSwipe = isFromSwipe))
                     currentUrl = newUrl
                   }
                 }
@@ -710,33 +741,125 @@ fun BrowserApp() {
             cameraDistance = 8 * density.density
           }
         )
+
+        // Lock Overlay
+        if (BrowserState.isLimitReached) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Icon(Icons.Default.TimerOff, null, tint = Color.White, modifier = Modifier.size(64.dp))
+                    Text("Session Limit Reached", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Button(
+                            onClick = { 
+                                BrowserState.addPageToFeed(
+                                    url = currentUrl, 
+                                    title = pageTitle, 
+                                    group = BrowserState.activeDomainObject?.defaultColorGroup ?: AppColorGroup.BLUE
+                                )
+                                BrowserState.isLimitReached = false
+                                android.widget.Toast.makeText(context, "Added to Feed!", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
+                        ) {
+                            Text("Follow Site")
+                        }
+                        Button(
+                            onClick = { 
+                                // For now, just clear the lock and toast
+                                BrowserState.isLimitReached = false
+                                android.widget.Toast.makeText(context, "Saved for Later!", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Save for Later")
+                        }
+                    }
+                    
+                    Text("Swipe UP to load next item", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
       }
     }
   }
+}
 
-  // Edit Dial Dialog
   editingBookmark?.let { bookmark ->
     var tempName by remember { mutableStateOf(bookmark.name) }
     var tempUrl by remember { mutableStateOf(bookmark.url) }
-    AlertDialog(
-      onDismissRequest = { editingBookmark = null },
-      title = { Text("Edit Dial") },
-      text = {
+    AlertDialog(onDismissRequest = { editingBookmark = null }, title = { Text("Edit Dial") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           OutlinedTextField(value = tempName, onValueChange = { tempName = it }, label = { Text("Name") })
           OutlinedTextField(value = tempUrl, onValueChange = { tempUrl = it }, label = { Text("URL") })
         }
       },
-      confirmButton = {
-        Button(onClick = {
+      confirmButton = { Button(onClick = {
             val updated = bookmark.copy(name = tempName, url = if (tempUrl.startsWith("http")) tempUrl else "https://$tempUrl")
             bookmarks = bookmarks.map { if (it.id == bookmark.id) updated else it }
-            saveBookmark(sharedPrefs, updated)
-            editingBookmark = null
-        }) { Text("Save") }
-      },
-      dismissButton = { TextButton(onClick = { editingBookmark = null }) { Text("Cancel") } }
+            saveBookmark(sharedPrefs, updated); editingBookmark = null
+        }) { Text("Save") } }, dismissButton = { TextButton(onClick = { editingBookmark = null }) { Text("Cancel") } }
     )
+  }
+
+  // Context Menu for Long-Press (Bitwarden & Feed)
+  contextMenuData?.let { url ->
+      AlertDialog(
+          onDismissRequest = { contextMenuData = null },
+          title = { Text("Quick Actions", fontWeight = FontWeight.Bold) },
+          text = { 
+              Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                  if (url.isNotEmpty()) {
+                      Text("Link: $url", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                  } else {
+                      Text("Active Page: $currentUrl", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                  }
+              }
+          },
+          confirmButton = {
+              Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Button(
+                      onClick = {
+                          if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                              val afm = context.getSystemService(AutofillManager::class.java)
+                              afm?.requestAutofill(webViewInstance!!)
+                          } else {
+                              android.widget.Toast.makeText(context, "AutoFill requires Android 8.0+", android.widget.Toast.LENGTH_SHORT).show()
+                          }
+                          contextMenuData = null
+                      },
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Icon(Icons.Default.Lock, null, modifier = Modifier.size(18.dp))
+                      Spacer(modifier = Modifier.width(8.dp))
+                      Text("Fill with Bitwarden")
+                  }
+                  
+                  if (url.isNotEmpty()) {
+                      OutlinedButton(
+                          onClick = {
+                              context.startActivity(Intent(context, AddActivity::class.java).apply {
+                                  putExtra("PREFILL_URL", url)
+                              })
+                              contextMenuData = null
+                          },
+                          modifier = Modifier.fillMaxWidth()
+                      ) {
+                          Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                          Spacer(modifier = Modifier.width(8.dp))
+                          Text("Add Link to Feed")
+                      }
+                  }
+              }
+          },
+          dismissButton = {
+              TextButton(onClick = { contextMenuData = null }) {
+                  Text("Cancel")
+              }
+          }
+      )
   }
 }
 
